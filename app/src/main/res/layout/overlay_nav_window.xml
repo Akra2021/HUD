@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/overlay_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/overlay_nav_window_bg"
+    android:padding="@dimen/overlay_padding">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:id="@+id/overlay_maneuver_icon"
+            android:layout_width="@dimen/overlay_icon_size"
+            android:layout_height="@dimen/overlay_icon_size"
+            android:layout_marginEnd="8dp"
+            android:contentDescription="@string/overlay_nav_icon"
+            android:scaleType="fitCenter"
+            android:src="@drawable/mapbox_ic_turn_straight"
+            android:visibility="visible" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/overlay_instruction"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFF"
+                android:textSize="@dimen/overlay_title_text"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/overlay_detail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#E3F2FD"
+                android:textSize="@dimen/overlay_body_text"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/overlay_route_summary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#E3F2FD"
+                android:textSize="@dimen/overlay_meta_text"
+                android:textStyle="bold"
+                android:visibility="gone" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

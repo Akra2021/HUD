@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Orange warning circle -->
+    <path
+        android:fillColor="#FF9800"
+        android:pathData="M24,4C12.95,4 4,12.95 4,24s8.95,20 20,20 20,-8.95 20,-20S35.05,4 24,4z" />
+    <!-- Camera housing -->
+    <path
+        android:fillColor="#37474F"
+        android:pathData="M13,19h22c0.55,0 1,0.45 1,1v11c0,0.55 -0.45,1 -1,1H13c-0.55,0 -1,-0.45 -1,-1V20c0,-0.55 0.45,-1 1,-1z" />
+    <!-- Viewfinder bump -->
+    <path
+        android:fillColor="#546E7A"
+        android:pathData="M18,19V16c0,-0.55 0.45,-1 1,-1h10c0.55,0 1,0.45 1,1v3H18z" />
+    <!-- Lens ring -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M24,25m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+    <!-- Lens center -->
+    <path
+        android:fillColor="#E53935"
+        android:pathData="M24,25m-4.5,0a4.5,4.5 0,1 1,9 0a4.5,4.5 0,1 1,-9 0" />
+    <!-- Flash -->
+    <path
+        android:fillColor="#FFEB3B"
+        android:pathData="M31,21h3v3h-3z" />
+</vector>

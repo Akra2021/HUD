@@ -1,3 +1,48 @@
 <resources>
     <string name="app_name">HUD extension</string>
+    <string name="overlay_nav_icon">Navigation maneuver icon</string>
+    <string name="overlay_waiting">Waiting for navigation…</string>
+    <string name="overlay_fullscreen_line1">No route data in notification</string>
+    <string name="overlay_fullscreen_line2">Exit Yandex fullscreen or use window mode</string>
+    <string name="accessibility_service_description">Reads navigation text on screen when Yandex Navigator is fullscreen (no notification data on Harmony OS).</string>
+    <string name="toast_accessibility_fullscreen">For fullscreen navigation, enable Accessibility → HUD extension</string>
+
+    <string name="toast_enable_notification_access">Enable notification access for HUD Extension</string>
+    <string name="toast_hud_enabled">NAV messages to HUD enabled</string>
+    <string name="toast_hud_disabled">HUD off — Display 3 hidden</string>
+    <string name="toast_toggle_failed">Toggle failed</string>
+    <string name="toast_enable_access_first">Enable notification access in settings first</string>
+    <string name="toast_reconnecting">Reconnecting…</string>
+    <string name="toast_open_settings_failed">Could not open settings — open Accessibility manually</string>
+
+    <string name="status_off">Off</string>
+    <string name="status_active">Active — %1$s</string>
+    <string name="status_fullscreen_a11y">Fullscreen: enable Accessibility</string>
+    <string name="status_connecting">Connecting… (Harmony OS)</string>
+    <string name="status_waiting_route">Connected — waiting for route</string>
+    <string name="status_grant_access">Allow access in settings</string>
+    <string name="status_turn_on_switch">Turn on the switch</string>
+
+    <string name="btn_reconnect">Reconnect</string>
+    <string name="btn_connect_service">Connect service</string>
+    <string name="btn_enable_accessibility">Enable Accessibility</string>
+    <string name="status_a11y_required">Accessibility required for fullscreen nav</string>
+    <string name="status_a11y_binding">Accessibility on — restart service</string>
+
+    <string name="app_yandex_navigator">Yandex Navigator</string>
+    <string name="app_petal_maps">Petal Maps</string>
+    <string name="app_petal_maps_car">Petal Maps (Car)</string>
+    <string name="nav_hud_source">HUD source</string>
+    <string name="nav_running_display0">Running on Display 0</string>
+    <string name="nav_installed">Installed</string>
+    <string name="nav_not_installed">Not installed</string>
+
+    <string name="permissions_required">Permissions required</string>
+    <string name="permission_notifications">Notifications</string>
+    <string name="permission_overlay">Display over other apps</string>
+    <string name="permission_granted">Granted</string>
+    <string name="permission_not_granted">Not granted</string>
+    <string name="permission_allow">Allow</string>
+    <string name="permission_open_settings">Open settings</string>
+
 </resources>

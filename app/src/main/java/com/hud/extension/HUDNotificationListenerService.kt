@@ -1,102 +1,131 @@
 package com.hud.extension
 
-import android.app.Notification
-import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.drawable.BitmapDrawable
-import android.graphics.drawable.Icon
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import android.util.Log
-import java.io.ByteArrayOutputStream
 
 class HUDNotificationListenerService : NotificationListenerService() {
 
-    override fun onNotificationPosted(sbn: StatusBarNotification) {
-        val packageName = sbn.packageName
-        
-        // Логируем ВСЕ уведомления для отладки, если ничего не приходит
-        Log.d("HUD_SCAN", "Notification received from: $packageName")
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
 
-        if (packageName.contains("huawei", ignoreCase = true) || packageName.contains("yandex", ignoreCase = true)) {
-            val notification = sbn.notification
-            val extras = notification.extras
-            
-            Log.d("HUD_DEBUG", "--- DETAILED SCAN: $packageName ---")
-            for (key in extras.keySet()) {
-                try {
-                    val value = extras.get(key)
-                    Log.d("HUD_DEBUG", "Key: $key | Value: $value")
-                } catch (e: Exception) {
-                    Log.e("HUD_DEBUG", "Error reading key $key")
-                }
-            }
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        super.onDestroy()
+    }
 
-            val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
-            val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
-            val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
-            val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
-
-            // Для Petal Maps часто важно проверить заголовок, если текст пустой
-            Log.d("HUD_DATA", "Package: $packageName | Title: $title | Text: $text | Sub: $subText")
-
-            val intent = Intent("com.hud.extension.NAV_UPDATE")
-            intent.putExtra("package", packageName)
-            
-            // Если текст пустой, но есть заголовок - берем заголовок
-            val finalTitle = if (title.isNotEmpty()) title else packageName
-            val finalText = when {
-                text.isNotEmpty() && !text.contains("Navigating", ignoreCase = true) -> text
-                bigText.isNotEmpty() -> bigText
-                subText.isNotEmpty() -> subText
-                else -> text // Оставляем как есть, если больше ничего нет
-            }
-
-            intent.putExtra("title", finalTitle)
-            intent.putExtra("text", finalText)
-            
-            // Пытаемся взять любую иконку
-            val icon = notification.getLargeIcon() ?: notification.smallIcon
-            icon?.let {
-                val bitmap = iconToBitmap(it)
-                bitmap?.let { b ->
-                    val stream = ByteArrayOutputStream()
-                    b.compress(Bitmap.CompressFormat.PNG, 100, stream)
-                    intent.putExtra("icon", stream.toByteArray())
-                }
-            }
-            
-            sendBroadcast(intent)
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        instance = this
+        HudLog.i("NLS connected hud=${HudPreferences.isHudEnabled(this)} selected=${HudPreferences.getSelectedNavPackage(this)}")
+        NavEventHub.publishConnection(true)
+        if (HudPreferences.isHudEnabled(this)) {
+            publishBestGuidance("onListenerConnected")
         }
     }
 
-    private fun iconToBitmap(icon: Icon): Bitmap? {
-        try {
-            val drawable = icon.loadDrawable(this) ?: return null
-            if (drawable is BitmapDrawable) return drawable.bitmap
-            
-            val bitmap = Bitmap.createBitmap(
-                drawable.intrinsicWidth.coerceAtLeast(1),
-                drawable.intrinsicHeight.coerceAtLeast(1),
-                Bitmap.Config.ARGB_8888
-            )
-            val canvas = Canvas(bitmap)
-            drawable.setBounds(0, 0, canvas.width, canvas.height)
-            drawable.draw(canvas)
-            return bitmap
-        } catch (e: Exception) {
-            Log.e("HUDNotification", "Icon error: ${e.message}")
-            return null
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        if (instance === this) instance = null
+        HudLog.i("NLS disconnected")
+        NavEventHub.publishConnection(false)
+    }
+
+    override fun onNotificationPosted(sbn: StatusBarNotification) {
+        if (!HudPreferences.isHudEnabled(this)) return
+        if (!NavNotificationParser.isNavPackage(sbn.packageName)) return
+        HudLog.i("posted pkg=${sbn.packageName} id=${sbn.id}")
+        if (!HudPreferences.isSelectedNavPackage(this, sbn.packageName)) {
+            HudLog.d("posted skip: not selected source")
+            return
         }
+        publishFromNotification(sbn, "posted")
+        publishBestGuidance("posted")
+    }
+
+    override fun onNotificationPosted(sbn: StatusBarNotification, rankingMap: RankingMap) {
+        onNotificationPosted(sbn)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        val pkg = sbn.packageName
-        if (pkg.contains("huawei") || pkg.contains("yandex")) {
-            val intent = Intent("com.hud.extension.NAV_UPDATE")
-            intent.putExtra("command", "clear")
-            sendBroadcast(intent)
+        if (!HudPreferences.isHudEnabled(this)) return
+        if (!NavNotificationParser.isNavPackage(sbn.packageName)) return
+        if (!HudPreferences.isSelectedNavPackage(this, sbn.packageName)) return
+        HudLog.i("removed pkg=${sbn.packageName} id=${sbn.id}")
+        publishBestGuidance("removed")
+    }
+
+    fun publishBestGuidance(reason: String): NavGuidance? {
+        if (!HudPreferences.isHudEnabled(this)) return null
+        var guidance = findBestGuidance(reason)
+        if (guidance == null && AccessibilityHelper.isFeatureAvailable(this)) {
+            NavAccessibilityService.requestScan(this, "notifEmpty:$reason")
         }
+        if (guidance == null) {
+            guidance = NavEventHub.getStaleGuidanceIfRecent()
+            if (guidance != null) {
+                HudLog.i("publish ($reason): using stale '${guidance.instruction}'")
+            }
+            if (guidance == null) {
+                HudLog.i("publish ($reason): no guidance from notifications")
+            }
+        }
+        if (guidance == null) return null
+        HudLog.i(
+            "publish ($reason): line1='${guidance.instruction}' line2='${guidance.detail}' " +
+                "line3='${guidance.routeSummaryText}' score=${guidance.detailScore}"
+        )
+        NavEventHub.publishNav(guidance, this)
+        return guidance
+    }
+
+    private fun publishFromNotification(sbn: StatusBarNotification, reason: String) {
+        if (!HudPreferences.isHudEnabled(this)) return
+        val guidance = NavNotificationParser.parse(sbn, this) { icon ->
+            NavNotificationParser.iconToBitmap(icon, this)
+        } ?: return
+        if (guidance.isPlaceholder || !guidance.hasDisplayableContent()) return
+        HudLog.i("publish direct ($reason) id=${sbn.id}: '${guidance.instruction}'")
+        NavEventHub.publishNav(guidance, this)
+    }
+
+    private fun findBestGuidance(reason: String = ""): NavGuidance? {
+        return try {
+            val active = activeNotifications
+            if (active == null) {
+                HudLog.i("findBestGuidance ($reason): activeNotifications=null (not bound yet)")
+                return null
+            }
+            HudLog.i("findBestGuidance ($reason): active count=${active.size}")
+            active.forEach { sbn ->
+                HudLog.i("  active: id=${sbn.id} pkg=${sbn.packageName} tag=${sbn.tag}")
+            }
+            NavNotificationParser.pickBest(active, this) { icon ->
+                NavNotificationParser.iconToBitmap(icon, this)
+            }
+        } catch (e: Exception) {
+            HudLog.e("findBestGuidance failed", e)
+            null
+        }
+    }
+
+    companion object {
+        const val ACTION_LISTENER_STATE = "com.hud.extension.LISTENER_STATE"
+        const val EXTRA_CONNECTED = "connected"
+
+        @Volatile
+        private var instance: HUDNotificationListenerService? = null
+
+        fun refreshActiveNotifications(reason: String = "refresh") {
+            val service = instance
+            if (service != null) {
+                service.publishBestGuidance(reason)
+                return
+            }
+            HudLog.i("refreshActiveNotifications ($reason): service instance null, need rebind")
+        }
+
+        fun isRunning(): Boolean = instance != null
     }
 }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Display 3: 800×480, nav overlay 566×166 -->
+<resources>
+    <dimen name="overlay_icon_size">58px</dimen>
+    <dimen name="overlay_title_text">14px</dimen>
+    <dimen name="overlay_body_text">10px</dimen>
+    <dimen name="overlay_meta_text">9px</dimen>
+    <dimen name="overlay_padding">5px</dimen>
+</resources>
