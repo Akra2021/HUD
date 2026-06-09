@@ -43,7 +43,9 @@ object MapboxManeuverResolver {
         Regex("""^(поверните|сверните|поворот)\s+(налево|направо|на\s+лево|на\s+право).*$""", RegexOption.IGNORE_CASE),
         Regex("""^(держитесь|keep)\s+(левее|правее|left|right).*$""", RegexOption.IGNORE_CASE),
         Regex("""^go\s+right\.?$""", RegexOption.IGNORE_CASE),
-        Regex("""^go\s+left\.?$""", RegexOption.IGNORE_CASE)
+        Regex("""^go\s+left\.?$""", RegexOption.IGNORE_CASE),
+        Regex("""^плавно\s+(налево|направо|влево|вправо).*$""", RegexOption.IGNORE_CASE),
+        Regex("""^плавно\s+(налево|направо|влево|вправо)\s+и\s+впер[её]д\.?$""", RegexOption.IGNORE_CASE)
     )
 
     @DrawableRes
@@ -70,6 +72,8 @@ object MapboxManeuverResolver {
 
     fun hasManeuverIcon(type: ManeuverType): Boolean = type != ManeuverType.UNKNOWN
 
+    fun isConfidentManeuver(type: ManeuverType): Boolean = type != ManeuverType.UNKNOWN
+
     fun isGenericManeuverLabel(text: String): Boolean {
         val normalized = text.trim()
         if (normalized.isEmpty()) return true
@@ -82,7 +86,8 @@ object MapboxManeuverResolver {
             "go right", "go left", "go straight", "go ahead", "go forward",
             "turn right", "turn left", "bear right", "bear left",
             "keep right", "keep left", "continue straight", "straight ahead",
-            "направо", "налево", "прямо", "движение прямо"
+            "направо", "налево", "прямо", "движение прямо",
+            "плавно направо", "плавно налево", "плавно направо и вперед", "плавно налево и вперед"
         )
         return lower.trimEnd('.', '!', '?', '…') in exact
     }
@@ -105,9 +110,13 @@ object MapboxManeuverResolver {
         containsAny(blob, "кругов", "roundabout", "rotary", "на кольц", "кольцо") ->
             ManeuverType.ROUNDABOUT
         containsAny(blob, "slight right", "bear right", "слегка направо", "слегка прав",
+            "плавно направо", "плавно вправо", "плавно направо и вперед", "плавно направо и вперёд",
+            "плавный поворот направо", "плавно поверните направо", "плавно держитесь правее",
             "держитесь правее", "keep right", "keep to the right") ->
             ManeuverType.SLIGHT_RIGHT
         containsAny(blob, "slight left", "bear left", "слегка налево", "слегка лев",
+            "плавно налево", "плавно влево", "плавно налево и вперед", "плавно налево и вперёд",
+            "плавный поворот налево", "плавно поверните налево", "плавно держитесь левее",
             "держитесь левее", "keep left", "keep to the left") ->
             ManeuverType.SLIGHT_LEFT
         containsAny(blob, "sharp right", "резко направо", "резкий поворот направо") ->

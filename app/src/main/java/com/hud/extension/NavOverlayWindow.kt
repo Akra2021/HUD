@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.util.DisplayMetrics
@@ -41,6 +42,11 @@ class NavOverlayWindow(private val context: Context) {
     private var instructionView: TextView? = null
     private var detailView: TextView? = null
     private var routeSummaryView: TextView? = null
+    private var trafficLightBlock: View? = null
+    private var trafficLightIconView: ImageView? = null
+    private var trafficTimerValueView: TextView? = null
+
+    private var contentScaleFactor = 1f
 
     private var overlayWidthPx = 0
     private var overlayHeightPx = 0
@@ -69,6 +75,9 @@ class NavOverlayWindow(private val context: Context) {
         instructionView = view.findViewById(R.id.overlay_instruction)
         detailView = view.findViewById(R.id.overlay_detail)
         routeSummaryView = view.findViewById(R.id.overlay_route_summary)
+        trafficLightBlock = view.findViewById(R.id.overlay_traffic_light_block)
+        trafficLightIconView = view.findViewById(R.id.overlay_traffic_light_icon)
+        trafficTimerValueView = view.findViewById(R.id.overlay_traffic_timer_value)
         scaleOverlayContent(view)
 
         showWaiting()
@@ -96,6 +105,7 @@ class NavOverlayWindow(private val context: Context) {
 
         try {
             windowManager.addView(view, layoutParams)
+            activeInstance = this
         } catch (e: Exception) {
             HudLog.e("overlay addView failed on display ${overlayContext.display?.displayId}", e)
             rootView = null
@@ -105,13 +115,16 @@ class NavOverlayWindow(private val context: Context) {
 
     fun updateGuidance(guidance: NavGuidance) {
         val line1 = HudOverlayIcons.sanitizeLine(
-            guidance.instruction.ifBlank { guidance.displayLines.getOrNull(0).orEmpty() }
-        )
-        val line2 = HudOverlayIcons.sanitizeLine(
-            guidance.detail.ifBlank { guidance.displayLines.getOrNull(1).orEmpty() }
+            guidance.instruction.ifBlank { guidance.stepDistanceText.orEmpty() }
         )
         val line3 = HudOverlayIcons.sanitizeLine(
             guidance.routeSummaryText.orEmpty().ifBlank { guidance.displayLines.getOrNull(2).orEmpty() }
+        )
+        val line2 = NavLineRules.cleanDetailForHud(
+            line1,
+            HudOverlayIcons.sanitizeLine(guidance.detail),
+            line3,
+            logSource = "overlay"
         )
 
         instructionView?.text = line1
@@ -124,19 +137,91 @@ class NavOverlayWindow(private val context: Context) {
         routeSummaryView?.visibility = if (line3.isBlank()) View.GONE else View.VISIBLE
 
         applyManeuverIcon(guidance, line1, line2, line3)
+        applyTrafficLightTimer(guidance.trafficLightSeconds)
+    }
+
+    /** Demo layout on HUD — e.g. 14 s or 120 s (3 digits). */
+    fun showTrafficLightExample(seconds: Int = 14) {
+        applyTrafficLightTimer(seconds.coerceIn(1, 999))
+    }
+
+    private fun applyTrafficLightTimer(seconds: Int?) {
+        val block = trafficLightBlock
+        val valueView = trafficTimerValueView
+        if (block == null || valueView == null) return
+
+        if (seconds == null || seconds <= 0) {
+            block.visibility = View.GONE
+            return
+        }
+
+        val label = seconds.toString()
+        valueView.text = label
+        valueView.setTextColor(Color.WHITE)
+        valueView.background = circleStrokeBackground()
+
+        val compact = label.length >= 3
+        val textPx = if (compact) {
+            overlayContext.resources.getDimension(R.dimen.overlay_traffic_timer_text_compact)
+        } else {
+            overlayContext.resources.getDimension(R.dimen.overlay_traffic_timer_text)
+        }
+        valueView.setTextSize(
+            TypedValue.COMPLEX_UNIT_PX,
+            (textPx * contentScaleFactor).coerceAtLeast(8f)
+        )
+
+        val circleMin = overlayContext.resources.getDimension(
+            if (compact) R.dimen.overlay_traffic_circle_min_wide else R.dimen.overlay_traffic_circle_min
+        )
+        val circlePx = (circleMin * contentScaleFactor).roundToInt().coerceAtLeast(28)
+        valueView.minWidth = circlePx
+        valueView.minHeight = circlePx
+
+        trafficLightIconView?.setImageResource(R.drawable.trafic_light)
+        block.visibility = View.VISIBLE
+    }
+
+    private fun circleStrokeBackground(): GradientDrawable {
+        val strokePx = (overlayContext.resources.getDimension(R.dimen.overlay_traffic_circle_stroke) * contentScaleFactor)
+            .roundToInt()
+            .coerceAtLeast(2)
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.TRANSPARENT)
+            setStroke(strokePx, Color.WHITE)
+        }
     }
 
     private fun applyManeuverIcon(guidance: NavGuidance, line1: String, line2: String, line3: String) {
         val view = maneuverIconView ?: return
+        val dgisHud = HudPreferences.isDgisSelected(overlayContext)
+        val yandexHud = HudPreferences.isYandexSelected(overlayContext)
         when {
             HudOverlayIcons.isSpeedCameraAlert(line1, line2, line3) -> {
                 view.setImageResource(HudOverlayIcons.speedCameraIcon)
                 view.clearColorFilter()
                 view.visibility = View.VISIBLE
             }
+            dgisHud && guidance.remoteManeuverIcon != null -> {
+                view.setImageBitmap(guidance.remoteManeuverIcon)
+                view.clearColorFilter()
+                view.visibility = View.VISIBLE
+            }
+            yandexHud -> applyYandexManeuverIcon(view, guidance, line1, line2, line3)
+            MapboxManeuverResolver.isConfidentManeuver(guidance.maneuverType) -> {
+                view.setImageResource(guidance.maneuverIconRes)
+                view.clearColorFilter()
+                view.visibility = View.VISIBLE
+            }
             guidance.remoteManeuverIcon != null -> {
                 view.setImageBitmap(guidance.remoteManeuverIcon)
-                view.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
+                applyManeuverBitmapTint(view, tintWhite = !dgisHud)
+                view.visibility = View.VISIBLE
+            }
+            guidance.notificationIcon != null -> {
+                view.setImageBitmap(guidance.notificationIcon)
+                applyManeuverBitmapTint(view, tintWhite = !dgisHud)
                 view.visibility = View.VISIBLE
             }
             MapboxManeuverResolver.hasManeuverIcon(guidance.maneuverType) -> {
@@ -144,29 +229,70 @@ class NavOverlayWindow(private val context: Context) {
                 view.clearColorFilter()
                 view.visibility = View.VISIBLE
             }
+            HudOverlayIcons.shouldShowNavFallbackIcon(guidance, line1, line2, line3) -> {
+                view.setImageResource(HudOverlayIcons.navFallbackIcon)
+                view.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
+                view.visibility = View.VISIBLE
+            }
             else -> {
-                view.setImageResource(HudOverlayIcons.defaultManeuverIcon)
+                view.visibility = View.GONE
+            }
+        }
+    }
+
+    /** Yandex: 1) icon from Navigator 2) word-based Mapbox 3) forward chevron. */
+    private fun applyYandexManeuverIcon(
+        view: ImageView,
+        guidance: NavGuidance,
+        line1: String,
+        line2: String,
+        line3: String
+    ) {
+        val yandexIcon = guidance.remoteManeuverIcon ?: guidance.notificationIcon
+        when {
+            yandexIcon != null -> {
+                view.setImageBitmap(yandexIcon)
+                view.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
+                view.visibility = View.VISIBLE
+            }
+            MapboxManeuverResolver.isConfidentManeuver(guidance.maneuverType) ||
+                MapboxManeuverResolver.hasManeuverIcon(guidance.maneuverType) -> {
+                view.setImageResource(guidance.maneuverIconRes)
                 view.clearColorFilter()
                 view.visibility = View.VISIBLE
             }
+            HudOverlayIcons.shouldShowNavFallbackIcon(guidance, line1, line2, line3) -> {
+                view.setImageResource(HudOverlayIcons.navFallbackIcon)
+                view.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
+                view.visibility = View.VISIBLE
+            }
+            else -> {
+                view.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun applyManeuverBitmapTint(view: ImageView, tintWhite: Boolean) {
+        if (tintWhite) {
+            view.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
+        } else {
+            view.clearColorFilter()
         }
     }
 
     fun showWaiting() {
         if (NavEventHub.yandexFullscreenPlaceholder) {
-            instructionView?.text = overlayContext.getString(R.string.overlay_fullscreen_line1)
+            instructionView?.text = overlayContext.getString(R.string.overlay_navigator_running)
             instructionView?.visibility = View.VISIBLE
-            detailView?.text = overlayContext.getString(R.string.overlay_fullscreen_line2)
-            detailView?.visibility = View.VISIBLE
+            detailView?.visibility = View.GONE
         } else {
             instructionView?.text = overlayContext.getString(R.string.overlay_waiting)
             instructionView?.visibility = View.VISIBLE
             detailView?.visibility = View.GONE
         }
         routeSummaryView?.visibility = View.GONE
-        maneuverIconView?.setImageResource(HudOverlayIcons.defaultManeuverIcon)
-        maneuverIconView?.clearColorFilter()
-        maneuverIconView?.visibility = View.VISIBLE
+        maneuverIconView?.visibility = View.GONE
+        trafficLightBlock?.visibility = View.GONE
     }
 
     fun dismiss() {
@@ -183,10 +309,17 @@ class NavOverlayWindow(private val context: Context) {
         instructionView = null
         detailView = null
         routeSummaryView = null
+        trafficLightBlock = null
+        trafficLightIconView = null
+        trafficTimerValueView = null
+        if (activeInstance === this) {
+            activeInstance = null
+        }
     }
 
     private fun scaleOverlayContent(root: View) {
-        val contentScale = overlayWidthPx.toFloat() / CONTENT_REF_WIDTH_PX.toFloat()
+        contentScaleFactor = overlayWidthPx.toFloat() / CONTENT_REF_WIDTH_PX.toFloat()
+        val contentScale = contentScaleFactor
         val textFactor = TEXT_SCALE / TEXT_SIZE_DIVISOR
         val iconSize = (BASE_ICON_PX * contentScale).roundToInt().coerceAtLeast(24)
 
@@ -194,6 +327,16 @@ class NavOverlayWindow(private val context: Context) {
             (maneuverIconView?.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.apply {
                 width = iconSize
                 height = iconSize
+            }
+
+        val trafficIconW = (overlayContext.resources.getDimension(R.dimen.overlay_traffic_icon_width) * contentScale)
+            .roundToInt().coerceAtLeast(20)
+        val trafficIconH = (overlayContext.resources.getDimension(R.dimen.overlay_traffic_icon_height) * contentScale)
+            .roundToInt().coerceAtLeast(28)
+        trafficLightIconView?.layoutParams =
+            (trafficLightIconView?.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.apply {
+                width = trafficIconW
+                height = trafficIconH
             }
 
         applyBoldText(instructionView, BASE_TITLE_PX * textFactor * contentScale)
@@ -226,20 +369,29 @@ class NavOverlayWindow(private val context: Context) {
     }
 
     companion object {
+        @Volatile
+        private var activeInstance: NavOverlayWindow? = null
+
+        fun dismissAny() {
+            activeInstance?.dismiss()
+            activeInstance = null
+        }
+
         const val TARGET_DISPLAY_ID = 3
         const val REF_SCREEN_WIDTH = 800
         const val REF_SCREEN_HEIGHT = 480
+        const val TOP_MARGIN_REF_PX = 90
         /** Было 666px (605 + 10%), уменьшаем на 15%. */
         const val OVERLAY_WIDTH_PX = 566
         const val OVERLAY_HEIGHT_PX = 166
-        private const val TOP_MARGIN_PX = 90
+        private const val TOP_MARGIN_PX = 40
         private const val CONTENT_REF_WIDTH_PX = 332
 
         private const val TEXT_SCALE = 2f
         private const val TEXT_SIZE_DIVISOR = 2.5f
         private const val BASE_TITLE_PX = 22f
-        private const val BASE_BODY_PX = 16f
-        private const val BASE_META_PX = 13f
+        private const val BASE_BODY_PX = 16f * 1.2f
+        private const val BASE_META_PX = 13f * 1.15f
         private const val BASE_ICON_PX = 72f
     }
 }

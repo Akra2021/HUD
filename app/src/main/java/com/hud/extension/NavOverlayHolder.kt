@@ -22,22 +22,41 @@ object NavOverlayHolder {
 
     fun applyGuidance(guidance: NavGuidance, context: android.content.Context) {
         if (!NotificationAccessHelper.isUserListeningEnabled(context)) return
-        mainHandler.post {
-            if (!NotificationAccessHelper.isUserListeningEnabled(context)) return@post
+        runOnMain {
+            if (!NotificationAccessHelper.isUserListeningEnabled(context)) return@runOnMain
             overlay?.updateGuidance(guidance)
         }
     }
 
     fun showWaiting() {
-        mainHandler.post {
+        runOnMain {
+            if (!isHudListening()) return@runOnMain
             overlay?.showWaiting()
         }
     }
 
     fun dismiss() {
-        mainHandler.post {
-            overlay?.dismiss()
-            overlay = null
+        runOnMain {
+            dismissImmediate()
+        }
+    }
+
+    fun dismissImmediate() {
+        overlay?.dismiss()
+        overlay = null
+        NavOverlayWindow.dismissAny()
+    }
+
+    private fun isHudListening(): Boolean {
+        val ctx = NotificationAccessHelper.getAppContext() ?: return false
+        return NotificationAccessHelper.isUserListeningEnabled(ctx)
+    }
+
+    private inline fun runOnMain(crossinline block: () -> Unit) {
+        if (Looper.myLooper() == mainHandler.looper) {
+            block()
+        } else {
+            mainHandler.post { block() }
         }
     }
 }

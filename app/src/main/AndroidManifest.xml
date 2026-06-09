@@ -1,57 +1,159 @@
 <?xml version="1.0" encoding="utf-8"?>
+
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+
+
     <queries>
+
         <package android:name="ru.yandex.yandexnavi" />
-        <package android:name="com.huawei.maps.app" />
-        <package android:name="com.huawei.maps.car.app" />
+
+        <package android:name="ru.dublgis.dgismobile" />
+
+        <package android:name="ru.dublgis.dgis" />
+
     </queries>
 
+
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
+    <uses-permission
+
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+
+        android:maxSdkVersion="32" />
+
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <application
+
+        android:name=".HudApplication"
+
         android:allowBackup="true"
+
         android:icon="@mipmap/hud_logo"
+
         android:label="@string/app_name"
+
         android:roundIcon="@mipmap/hud_logo"
+
         android:supportsRtl="true"
+
         android:theme="@style/Theme.MyApplication">
+
+
+
         <activity
+
             android:name=".MainActivity"
+
             android:exported="true"
+
             android:theme="@style/Theme.MyApplication">
+
             <intent-filter>
+
                 <action android:name="android.intent.action.MAIN" />
+
                 <category android:name="android.intent.category.LAUNCHER" />
+
             </intent-filter>
+
         </activity>
 
-        <service
-            android:name=".HUDNotificationListenerService"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-            <!-- Без этого на Android 12+ / Harmony уведомления могут не приходить -->
-            <meta-data
-                android:name="android.service.notification.default_filter_types"
-                android:value="ongoing|alerting|conversations|silent" />
-        </service>
+
+
+        <activity
+
+            android:name=".TurnSignalCameraActivity"
+
+            android:exported="false"
+
+            android:theme="@style/Theme.MyApplication" />
+
+
 
         <service
-            android:name=".NavAccessibilityService"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/nav_accessibility_config" />
+
+            android:name=".HudListeningForegroundService"
+
+            android:exported="false"
+
+            android:foregroundServiceType="specialUse">
+
+            <property
+
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+
+                android:value="Keeps notification listener bound on Harmony OS head units" />
+
         </service>
+
+
+
+        <service
+
+            android:name=".HUDNotificationListenerService"
+
+            android:exported="true"
+
+            android:label="@string/app_name"
+
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+
+            <intent-filter>
+
+                <action android:name="android.service.notification.NotificationListenerService" />
+
+            </intent-filter>
+
+            <meta-data
+
+                android:name="android.service.notification.default_filter_types"
+
+                android:value="ongoing|alerting|conversations|silent" />
+
+        </service>
+
+
+
+        <service
+
+            android:name=".NavAccessibilityService"
+
+            android:exported="true"
+
+            android:label="@string/app_name"
+
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+
+            <intent-filter>
+
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+
+            </intent-filter>
+
+            <meta-data
+
+                android:name="android.accessibilityservice"
+
+                android:resource="@xml/nav_accessibility_config" />
+
+        </service>
+
     </application>
 
+
+
 </manifest>
+
+

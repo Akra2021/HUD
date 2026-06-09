@@ -7,7 +7,7 @@ import android.os.Looper
 /** Периодическое обновление HUD (маршрут в полном экране часто не шлёт notification). */
 object HudRefreshScheduler {
 
-    private const val POLL_INTERVAL_MS = 2_000L
+    private const val POLL_INTERVAL_MS = 800L
 
     private val handler = Handler(Looper.getMainLooper())
     private var appContext: Context? = null
@@ -24,7 +24,7 @@ object HudRefreshScheduler {
             if (AccessibilityHelper.isFeatureAvailable(ctx)) {
                 NavAccessibilityService.requestScan(ctx, "poll")
             }
-            if (NavEventHub.lastGuidance != null) {
+            if (NavEventHub.hasLiveNavFeed()) {
                 NavEventHub.republishLastToOverlay(ctx)
             }
             handler.postDelayed(this, POLL_INTERVAL_MS)

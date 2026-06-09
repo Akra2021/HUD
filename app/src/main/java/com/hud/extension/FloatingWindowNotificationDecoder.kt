@@ -62,9 +62,7 @@ object FloatingWindowNotificationDecoder {
             }
         }
 
-        notification.actions?.forEach { action ->
-            action.title?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let(texts::add)
-        }
+        // Action button labels (e.g. 2GIS "Complete the route") are not route data.
 
         notification.getLargeIcon()?.let { iconLoader(it)?.let(icons::add) }
         if (icons.isEmpty()) {
@@ -193,8 +191,11 @@ object FloatingWindowNotificationDecoder {
     private fun walkView(view: View, texts: LinkedHashSet<String>, icons: MutableList<Bitmap>) {
         when (view) {
             is TextView -> {
-                view.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts.add(it) }
-                view.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts.add(it) }
+                view.text?.toString()?.trim()?.takeIf { it.isNotEmpty() && !NavLineRules.isNotificationActionLine(it) }
+                    ?.let { texts.add(it) }
+                view.contentDescription?.toString()?.trim()
+                    ?.takeIf { it.isNotEmpty() && !NavLineRules.isNotificationActionLine(it) }
+                    ?.let { texts.add(it) }
             }
             is ImageView -> bitmapFromImageView(view)?.let { icons.add(it) }
         }

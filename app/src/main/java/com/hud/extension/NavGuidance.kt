@@ -24,6 +24,8 @@ data class NavGuidance(
     val maneuverType: MapboxManeuverResolver.ManeuverType,
     @ColorInt val distanceTimerColor: Int,
     @ColorInt val timeTimerColor: Int,
+    /** Yandex traffic-light countdown in seconds (1–999), if present in notification. */
+    val trafficLightSeconds: Int? = null,
     val notificationIcon: Bitmap?,
     /** Все уникальные строки из floating_window_notification (RemoteViews + extras). */
     val displayLines: List<String> = emptyList(),
@@ -36,7 +38,8 @@ data class NavGuidance(
         instruction == other.instruction &&
             detail == other.detail &&
             routeSummaryText == other.routeSummaryText &&
-            maneuverType == other.maneuverType
+            maneuverType == other.maneuverType &&
+            trafficLightSeconds == other.trafficLightSeconds
 
     fun hasDisplayableContent(): Boolean =
         instruction.isNotBlank() ||

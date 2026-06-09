@@ -10,9 +10,9 @@ android {
     defaultConfig {
         applicationId = "com.hud.extension"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 33
+        versionCode = 7
+        versionName = "2.0"
     }
     
     buildFeatures {

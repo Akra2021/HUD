@@ -22,18 +22,19 @@ if [ "$choice" == "a" ]; then
     echo "--- Установка на телефон... ---"
     adb install -r "$APK_PATH"
 elif [ "$choice" == "b" ]; then
-    echo "--- Выполнение команд для Car... ---"
-
-    echo "Push APK..."
+    echo "--- Установка на машину (Huawei car installer)... ---"
     adb push "$APK_PATH" /data/local/tmp/app-debug.apk
-
-    echo "Отключение packageinstaller..."
-    adb shell "pm disable-user --user 13 com.android.packageinstaller"
-
-    echo "Установка через Huawei Installer..."
-    adb shell "pm install -r -d -g -i com.huawei.appinstaller.car /data/local/tmp/app-debug.apk"
-
-    echo "--- Готово ---"
+    if adb shell pm install -r -d -g -i com.huawei.appinstaller.car /data/local/tmp/app-debug.apk; then
+        echo "Установлено."
+    else
+        echo "Huawei installer failed, пробуем pm install -r ..."
+        adb shell pm install -r /data/local/tmp/app-debug.apk
+    fi
+    echo ""
+    echo "Обычный adb install на машине падает с INSTALL_FAILED_INTERNAL_ERROR — используйте b или:"
+    echo "  scripts/install_car.sh"
+    echo ""
+    echo "Установлено. Выберите Yandex или 2GIS и включите HUD в приложении."
 else
     echo "Неверный выбор. Используйте 'a' или 'b'."
 fi

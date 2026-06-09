@@ -17,10 +17,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,8 +44,40 @@ private const val HUD_SWITCH_SCALE = 0.6f
 private const val APP_CARD_WIDTH_FRACTION = 0.5f
 private val ReconnectButtonBlue = Color(0xFF42A5F5)
 private val AppListIconSize = 39.dp
+private val AppCardShape = RoundedCornerShape(12.dp)
+private val AppCardBorder = BorderStroke(1.dp, Color(0xFFD0D0D0))
+private const val AppCardBackgroundAlpha = 0.5f
 
 private fun Modifier.appCardWidth(): Modifier = fillMaxWidth(APP_CARD_WIDTH_FRACTION)
+
+@Composable
+private fun appCardBorderColors(): CardColors = CardDefaults.cardColors(
+    containerColor = Color.Transparent
+)
+
+@Composable
+private fun appCardColors(containerColor: Color = MaterialTheme.colorScheme.surface): CardColors =
+    CardDefaults.cardColors(containerColor = containerColor.copy(alpha = AppCardBackgroundAlpha))
+
+@Composable
+private fun AppCardGroup(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        modifier = modifier.appCardWidth(),
+        shape = AppCardShape,
+        border = AppCardBorder,
+        colors = appCardBorderColors(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            content = content
+        )
+    }
+}
 
 private fun Typography.scaleBy(factor: Float): Typography = copy(
     displayLarge = displayLarge.scaleBy(factor),
@@ -86,14 +120,32 @@ class MainActivity : ComponentActivity() {
     private val notificationAccessGrantedState = mutableStateOf(false)
     private val selectedNavPackageState = mutableStateOf<String?>(null)
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
     override fun onResume() {
         super.onResume()
         HudPreferences.ensureDefaultSelection(this)
         refreshNotificationUiState()
         selectedNavPackageState.value = HudPreferences.getSelectedNavPackage(this)
         listenerConnectedState.value = NavEventHub.serviceConnected
+        if (!NotificationAccessHelper.isUserListeningEnabled(this)) {
+            dismissOverlay()
+            return
+        }
+        if (!NotificationAccessHelper.isEnabled(this)) {
+            HudListeningForegroundService.stop(this)
+            HudRefreshScheduler.stop()
+            dismissOverlay()
+            return
+        }
+        if (HudPreferences.usesNotificationNavPath(this)) {
+            NotificationAccessHelper.ensureBindingOnResume(this)
+        }
         syncHudOutput()
-        if (NotificationAccessHelper.isUserListeningEnabled(this)) {
+        if (HudPreferences.usesNotificationNavPath(this)) {
             window.decorView.postDelayed({ refreshNavData() }, 800)
         }
     }
@@ -125,7 +177,10 @@ class MainActivity : ComponentActivity() {
                         onNotificationListeningChange = ::onNotificationListeningToggle,
                         onSelectNavApp = ::onSelectNavApp,
                         onReconnect = { forceReconnectFromUi() },
-                        onSyncHudOutput = { syncHudOutput() }
+                        onSyncHudOutput = { syncHudOutput() },
+                        onOpenNotificationAccess = {
+                            NotificationAccessHelper.openAccessSettings(this)
+                        }
                     )
                 }
             }
@@ -133,11 +188,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onSelectNavApp(packageName: String) {
-        val normalized = HudPreferences.normalizeNavPackage(this, packageName) ?: packageName
-        HudPreferences.setSelectedNavPackage(this, normalized)
-        selectedNavPackageState.value = normalized
-        if (NotificationAccessHelper.isUserListeningEnabled(this)) {
-            syncHudOutput()
+        HudPreferences.setSelectedNavPackage(this, packageName)
+        selectedNavPackageState.value = packageName
+        NavEventHub.resetLastGuidance()
+        NavEventHub.resetNavPlaceholders()
+        window.decorView.post {
+            if (NotificationAccessHelper.isUserListeningEnabled(this)) {
+                syncHudOutput()
+                HUDNotificationListenerService.refreshActiveNotifications("navSwitch")
+            }
         }
     }
 
@@ -174,6 +233,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleNavUpdate(update: NavEventHub.NavUpdate) {
         if (!NotificationAccessHelper.isUserListeningEnabled(this)) return
+        if (!HudPreferences.usesNotificationNavPath(this)) return
 
         listenerConnectedState.value = true
         if (navOverlay == null && Settings.canDrawOverlays(this)) {
@@ -196,6 +256,10 @@ class MainActivity : ComponentActivity() {
             dismissOverlay()
             return
         }
+        if (!NotificationAccessHelper.isEnabled(this)) {
+            dismissOverlay()
+            return
+        }
         if (!Settings.canDrawOverlays(this)) {
             dismissOverlay()
             return
@@ -211,7 +275,12 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshNavData() {
         if (!NotificationAccessHelper.isUserListeningEnabled(this)) return
+        if (!HudPreferences.usesNotificationNavPath(this)) return
         HUDNotificationListenerService.refreshActiveNotifications("syncHudOutput")
+        if (NavEventHub.yandexFullscreenPlaceholder) {
+            navOverlay?.showWaiting()
+            return
+        }
         val guidance = NavEventHub.lastGuidance
         if (guidance != null && guidance.hasDisplayableContent()) {
             navOverlay?.updateGuidance(guidance)
@@ -221,17 +290,28 @@ class MainActivity : ComponentActivity() {
     }
 
     fun dismissOverlay() {
+        dismissTextOverlay()
+        HudLog.i("overlay dismissed (HUD off or no permission)")
+    }
+
+    private fun dismissTextOverlay() {
         HudRefreshScheduler.stop()
+        NavEventHub.resetNavPlaceholders()
+        dismissNavOverlayOnly()
+        NavEventHub.resetLastGuidance()
+    }
+
+    private fun dismissNavOverlayOnly() {
         navOverlay?.dismiss()
         navOverlay = null
-        NavOverlayHolder.dismiss()
-        NavEventHub.resetLastGuidance()
-        HudLog.i("overlay dismissed (HUD off or no permission)")
+        NavOverlayHolder.dismissImmediate()
+        NavOverlayWindow.dismissAny()
     }
 
     fun ensureOverlay() {
         if (!NotificationAccessHelper.isUserListeningEnabled(this)) return
         if (!Settings.canDrawOverlays(this)) return
+        if (!HudPreferences.usesNotificationNavPath(this)) return
         if (navOverlay != null) {
             NavOverlayHolder.attach(navOverlay!!)
             return
@@ -249,6 +329,7 @@ class MainActivity : ComponentActivity() {
 
     fun maybeReconnect() {
         if (!NotificationAccessHelper.isUserListeningEnabled(this)) return
+        if (!HudPreferences.usesNotificationNavPath(this)) return
         if (!NotificationAccessHelper.isEnabled(this)) return
         val now = System.currentTimeMillis()
         val needsImmediate = !NavEventHub.serviceConnected
@@ -256,7 +337,11 @@ class MainActivity : ComponentActivity() {
         if (now - lastReconnectAt < minInterval) return
         lastReconnectAt = now
         HudLog.i("maybeReconnect immediate=$needsImmediate")
-        NotificationAccessHelper.forceReconnect(this)
+        if (!NotificationListenerCompat.supportsUnbind && needsImmediate) {
+            NotificationAccessHelper.runHarmonyRecovery(this)
+        } else {
+            NotificationAccessHelper.forceReconnect(this)
+        }
     }
 
     fun forceReconnectFromUi() {
@@ -267,7 +352,7 @@ class MainActivity : ComponentActivity() {
         }
         lastReconnectAt = System.currentTimeMillis()
         listenerConnectedState.value = false
-        NotificationAccessHelper.forceReconnect(this)
+        NotificationAccessHelper.runHarmonyRecovery(this)
         Toast.makeText(this, R.string.toast_reconnecting, Toast.LENGTH_SHORT).show()
     }
 
@@ -319,12 +404,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestHudPermissionsIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            // Запрос выполняется из Compose launcher при отображении списка.
-        }
         if (!Settings.canDrawOverlays(this)) {
             startActivity(
                 Intent(
@@ -336,15 +415,12 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         try {
             detachNavPipeline()
-            if (!NotificationAccessHelper.isUserListeningEnabled(this)) {
-                dismissOverlay()
-            }
         } catch (e: Exception) {
             Log.e("HUD_EXT", "Error in onDestroy: ${e.message}")
         }
+        super.onDestroy()
     }
 }
 
@@ -358,7 +434,8 @@ fun NavAppList(
     onNotificationListeningChange: (Boolean) -> Unit,
     onSelectNavApp: (String) -> Unit,
     onReconnect: () -> Unit = {},
-    onSyncHudOutput: () -> Unit = {}
+    onSyncHudOutput: () -> Unit = {},
+    onOpenNotificationAccess: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var hasNavFeed by remember { mutableStateOf(NavEventHub.hasLiveNavFeed()) }
@@ -379,8 +456,10 @@ fun NavAppList(
         notificationsGranted = granted
     }
 
-    LaunchedEffect(overlayGranted, notificationListening) {
-        if (notificationListening && overlayGranted) onSyncHudOutput()
+    LaunchedEffect(overlayGranted, notificationListening, notificationAccessGranted) {
+        if (notificationListening && notificationAccessGranted && overlayGranted) {
+            onSyncHudOutput()
+        }
         if (!notificationListening) {
             (context as? MainActivity)?.dismissOverlay()
         }
@@ -435,22 +514,42 @@ fun NavAppList(
         }
 
         item {
-            NotificationAccessCard(
-                listening = notificationListening,
-                systemAccessGranted = notificationAccessGranted,
-                listenerConnected = listenerConnected,
-                selectedNavPackage = selectedNavPackage,
-                onListeningChange = onNotificationListeningChange,
-                onReconnect = onReconnect,
-                hasNavFeed = hasNavFeed
-            )
+            AppCardGroup {
+                NotificationAccessContent(
+                    listening = notificationListening,
+                    systemAccessGranted = notificationAccessGranted,
+                    listenerConnected = listenerConnected,
+                    selectedNavPackage = selectedNavPackage,
+                    onListeningChange = onNotificationListeningChange,
+                    onReconnect = onReconnect,
+                    onOpenNotificationAccess = onOpenNotificationAccess,
+                    hasNavFeed = hasNavFeed
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    apps.forEach { app ->
+                        NavAppItem(
+                            modifier = Modifier.weight(1f),
+                            app = app,
+                            selected = HudPreferences.isSameNavSource(selectedNavPackage, app.packageName),
+                            hudEnabled = notificationListening,
+                            onSelect = { onSelectNavApp(app.packageName) }
+                        )
+                    }
+                }
+            }
         }
 
-        if (notificationListening && (!notificationsGranted || !overlayGranted)) {
+        if (notificationListening &&
+            (!notificationAccessGranted || !notificationsGranted || !overlayGranted)
+        ) {
             item {
                 PermissionsSection(
                     notificationsGranted = notificationsGranted,
                     overlayGranted = overlayGranted,
+                    notificationAccessGranted = notificationAccessGranted,
                     onRequestNotifications = {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -463,17 +562,17 @@ fun NavAppList(
                                 Uri.parse("package:${context.packageName}")
                             )
                         )
-                    }
+                    },
+                    onOpenNotificationAccess = onOpenNotificationAccess,
                 )
             }
         }
 
-        items(apps) { app ->
-            NavAppItem(
-                app = app,
-                selected = HudPreferences.isSameNavSource(selectedNavPackage, app.packageName),
-                hudEnabled = notificationListening,
-                onSelect = { onSelectNavApp(app.packageName) }
+        item {
+            TurnSignalCameraCard(
+                onOpen = {
+                    context.startActivity(Intent(context, TurnSignalCameraActivity::class.java))
+                }
             )
         }
 
@@ -481,76 +580,90 @@ fun NavAppList(
 }
 
 @Composable
-private fun NotificationAccessCard(
+private fun TurnSignalCameraCard(onOpen: () -> Unit) {
+    val context = LocalContext.current
+    AppCardGroup {
+        Text(
+            text = context.getString(R.string.turn_signal_title),
+            style = MaterialTheme.typography.titleMedium
+        )
+        Text(
+            text = context.getString(R.string.turn_signal_description),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+        )
+        Button(
+            onClick = onOpen,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(context.getString(R.string.turn_signal_open))
+        }
+    }
+}
+
+@Composable
+private fun NotificationAccessContent(
     listening: Boolean,
     systemAccessGranted: Boolean,
     listenerConnected: Boolean,
     selectedNavPackage: String?,
     onListeningChange: (Boolean) -> Unit,
     onReconnect: () -> Unit,
+    onOpenNotificationAccess: () -> Unit,
     hasNavFeed: Boolean
 ) {
     val context = LocalContext.current
-    Card(
-        modifier = Modifier.appCardWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Notification to HUD",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = when {
-                            !listening ->
-                                context.getString(R.string.status_off)
-                            listening && !systemAccessGranted ->
-                                context.getString(R.string.status_grant_access)
-                            listening && hasNavFeed && selectedNavPackage != null ->
-                                context.getString(R.string.status_active, appLabel(context, selectedNavPackage))
-                            listening && listenerConnected && systemAccessGranted ->
-                                context.getString(R.string.status_waiting_route)
-                            listening && systemAccessGranted ->
-                                context.getString(R.string.status_connecting)
-                            else ->
-                                context.getString(R.string.status_off)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
-                    )
-                }
-                Switch(
-                    modifier = Modifier.scale(HUD_SWITCH_SCALE),
-                    checked = listening,
-                    onCheckedChange = onListeningChange
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Notification to HUD",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = when {
+                        !listening ->
+                            context.getString(R.string.status_off)
+                        listening && !systemAccessGranted ->
+                            context.getString(R.string.status_grant_access)
+                        listening && hasNavFeed && selectedNavPackage != null ->
+                            context.getString(R.string.status_active, appLabel(context, selectedNavPackage))
+                        listening && listenerConnected && systemAccessGranted ->
+                            context.getString(R.string.status_waiting_route)
+                        listening && systemAccessGranted ->
+                            context.getString(R.string.status_connecting)
+                        else ->
+                            context.getString(R.string.status_off)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
                 )
             }
-            if (listening && systemAccessGranted) {
-                Button(
-                    onClick = onReconnect,
-                    modifier = Modifier.height(32.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = ReconnectButtonBlue,
-                        contentColor = Color.White
-                    )
-                ) {
-                    Text(
-                        text = context.getString(
-                            if (listenerConnected) R.string.btn_reconnect else R.string.btn_connect_service
-                        ),
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                }
+            Switch(
+                modifier = Modifier.scale(HUD_SWITCH_SCALE),
+                checked = listening,
+                onCheckedChange = onListeningChange
+            )
+        }
+        if (listening && systemAccessGranted && HudPreferences.usesNotificationNavPath(context)) {
+            Button(
+                onClick = onReconnect,
+                modifier = Modifier.height(32.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ReconnectButtonBlue,
+                    contentColor = Color.White
+                )
+            ) {
+                Text(
+                    text = context.getString(
+                        if (listenerConnected) R.string.btn_reconnect else R.string.btn_connect_service
+                    ),
+                    style = MaterialTheme.typography.labelMedium
+                )
             }
         }
     }
@@ -558,7 +671,7 @@ private fun NotificationAccessCard(
 
 private fun appLabel(context: Context, packageName: String): String = when {
     packageName.contains("yandexnavi") -> context.getString(R.string.app_yandex_navigator)
-    packageName.contains("huawei.maps") -> context.getString(R.string.app_petal_maps)
+    HudPreferences.isDgisPackage(packageName) -> context.getString(R.string.app_2gis)
     else -> packageName
 }
 
@@ -566,14 +679,16 @@ private fun appLabel(context: Context, packageName: String): String = when {
 private fun PermissionsSection(
     notificationsGranted: Boolean,
     overlayGranted: Boolean,
+    notificationAccessGranted: Boolean,
     onRequestNotifications: () -> Unit,
-    onOpenOverlay: () -> Unit
+    onOpenOverlay: () -> Unit,
+    onOpenNotificationAccess: () -> Unit
 ) {
     Card(
         modifier = Modifier.appCardWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer
-        )
+        shape = AppCardShape,
+        border = AppCardBorder,
+        colors = appCardColors(MaterialTheme.colorScheme.errorContainer)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -583,6 +698,13 @@ private fun PermissionsSection(
             Text(
                 text = context.getString(R.string.permissions_required),
                 style = MaterialTheme.typography.titleMedium
+            )
+
+            PermissionRow(
+                label = context.getString(R.string.permission_notification_access),
+                granted = notificationAccessGranted,
+                buttonText = context.getString(R.string.permission_open_settings),
+                onClick = onOpenNotificationAccess
             )
 
             PermissionRow(
@@ -647,32 +769,29 @@ private fun hasPostNotificationsPermission(context: Context): Boolean {
 
 private fun getNavApps(context: Context): List<NavAppData> {
     val pm = context.packageManager
-    val petalPackage = HudPreferences.resolvePetalPackage(context)
-    val targetApps = buildList {
-        add("ru.yandex.yandexnavi" to context.getString(R.string.app_yandex_navigator))
-        add(petalPackage to context.getString(R.string.app_petal_maps))
-    }
+    val dgisPackage = HudPreferences.resolveDgisPackage(context)
+    val targetApps = listOf(
+        HudPreferences.YANDEX_PACKAGE to context.getString(R.string.app_yandex_navigator),
+        dgisPackage to context.getString(R.string.app_2gis),
+    )
 
-    val runningApps = mutableSetOf<String>()
+    var yandexRunning = false
+    var dgisRunning = false
 
     try {
         val process = Runtime.getRuntime().exec(
             arrayOf("sh", "-c", "dumpsys activity activities | grep -E 'mResumedActivity|mFocusedApp'")
         )
         val output = process.inputStream.bufferedReader().readText()
-        if (output.contains("yandexnavi")) runningApps.add("ru.yandex.yandexnavi")
-        if (output.contains("huawei.maps")) {
-            HudPreferences.petalPackages.forEach { pkg ->
-                if (output.contains(pkg)) runningApps.add(pkg)
-            }
-        }
-        if (runningApps.isEmpty()) {
-            val process2 = Runtime.getRuntime().exec(arrayOf("sh", "-c", "ps -A | grep -E 'yandexnavi|huawei.maps'"))
+        yandexRunning = output.contains("yandexnavi")
+        dgisRunning = output.contains("dublgis") || output.contains("dgismobile")
+        if (!yandexRunning && !dgisRunning) {
+            val process2 = Runtime.getRuntime().exec(
+                arrayOf("sh", "-c", "ps -A | grep -E 'yandexnavi|dublgis'")
+            )
             val output2 = process2.inputStream.bufferedReader().readText()
-            if (output2.contains("yandexnavi")) runningApps.add("ru.yandex.yandexnavi")
-            HudPreferences.petalPackages.forEach { pkg ->
-                if (output2.contains(pkg)) runningApps.add(pkg)
-            }
+            yandexRunning = output2.contains("yandexnavi")
+            dgisRunning = output2.contains("dublgis")
         }
     } catch (e: Exception) {
         Log.e("HUD_EXT", "Detection failed: ${e.message}")
@@ -683,33 +802,40 @@ private fun getNavApps(context: Context): List<NavAppData> {
         var name = fallbackName
         var icon: Drawable? = null
 
-        if (HudPreferences.isPetalPackage(pkg)) {
-            isInstalled = HudPreferences.isAnyPetalInstalled(context)
-            if (isInstalled) {
+        when {
+            HudPreferences.isDgisPackage(pkg) -> {
+                isInstalled = HudPreferences.isDgisInstalled(context)
+                val installedPkg = HudPreferences.resolveDgisPackage(context)
+                if (isInstalled) {
+                    try {
+                        val info = pm.getApplicationInfo(installedPkg, 0)
+                        name = pm.getApplicationLabel(info).toString()
+                        icon = pm.getApplicationIcon(info)
+                    } catch (_: PackageManager.NameNotFoundException) {}
+                }
+            }
+            else -> {
                 try {
-                    val info = pm.getApplicationInfo(petalPackage, 0)
+                    val info = pm.getApplicationInfo(pkg, 0)
                     name = pm.getApplicationLabel(info).toString()
                     icon = pm.getApplicationIcon(info)
+                    isInstalled = true
                 } catch (_: PackageManager.NameNotFoundException) {}
             }
-        } else {
-            try {
-                val info = pm.getApplicationInfo(pkg, 0)
-                name = pm.getApplicationLabel(info).toString()
-                icon = pm.getApplicationIcon(info)
-                isInstalled = true
-            } catch (_: PackageManager.NameNotFoundException) {}
         }
 
         val isRunning = when {
-            pkg == "ru.yandex.yandexnavi" -> runningApps.contains(pkg)
-            HudPreferences.isPetalPackage(pkg) -> HudPreferences.isPetalRunning(runningApps)
-            else -> runningApps.contains(pkg)
+            pkg == HudPreferences.YANDEX_PACKAGE -> yandexRunning
+            HudPreferences.isDgisPackage(pkg) -> dgisRunning
+            else -> false
         }
 
         NavAppData(
             name = name,
-            packageName = if (HudPreferences.isPetalPackage(pkg)) petalPackage else pkg,
+            packageName = when {
+                HudPreferences.isDgisPackage(pkg) -> HudPreferences.resolveDgisPackage(context)
+                else -> pkg
+            },
             icon = icon,
             isInstalled = isInstalled,
             isRunning = isRunning
@@ -717,8 +843,15 @@ private fun getNavApps(context: Context): List<NavAppData> {
     }
 }
 
+private fun isPackageInstalled(pm: PackageManager, packageName: String): Boolean =
+    runCatching {
+        pm.getApplicationInfo(packageName, 0)
+        true
+    }.getOrElse { false }
+
 @Composable
 fun NavAppItem(
+    modifier: Modifier = Modifier,
     app: NavAppData,
     selected: Boolean,
     hudEnabled: Boolean,
@@ -728,24 +861,26 @@ fun NavAppItem(
     val grayscaleMatrix = remember {
         ColorMatrix().apply { setToSaturation(0f) }
     }
+    val compactIconSize = 32.dp
+    val innerShape = RoundedCornerShape(8.dp)
+    val backgroundColor = when {
+        selected && hudEnabled -> MaterialTheme.colorScheme.primaryContainer
+        app.isRunning -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }.copy(alpha = AppCardBackgroundAlpha)
 
-    Card(
-        modifier = Modifier.appCardWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = when {
-                selected && hudEnabled -> MaterialTheme.colorScheme.primaryContainer
-                app.isRunning -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
-                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (app.isInstalled) 1f else 0.5f)
-            }
-        )
+    Surface(
+        modifier = modifier,
+        shape = innerShape,
+        color = backgroundColor
     ) {
         Row(
             modifier = Modifier
-                .padding(12.dp)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(modifier = Modifier.size(AppListIconSize)) {
+            Box(modifier = Modifier.size(compactIconSize)) {
                 if (app.icon != null) {
                     Image(
                         bitmap = app.icon.toBitmap().asImageBitmap(),
@@ -756,21 +891,24 @@ fun NavAppItem(
                 }
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = app.name,
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1
                 )
                 Text(
                     text = when {
-                        selected && hudEnabled -> context.getString(R.string.nav_hud_source)
+                        selected && hudEnabled ->
+                            context.getString(R.string.nav_hud_source)
                         app.isRunning -> context.getString(R.string.nav_running_display0)
                         app.isInstalled -> context.getString(R.string.nav_installed)
                         else -> context.getString(R.string.nav_not_installed)
                     },
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
                     color = if (selected && hudEnabled || app.isRunning) {
                         MaterialTheme.colorScheme.primary
                     } else {
@@ -780,6 +918,7 @@ fun NavAppItem(
             }
 
             Checkbox(
+                modifier = Modifier.scale(0.85f),
                 checked = selected,
                 onCheckedChange = { checked ->
                     if (checked && hudEnabled) onSelect()

@@ -1,0 +1,11 @@
+---
+description: Harmony OS car head unit constraints
+alwaysApply: true
+---
+
+# Harmony car head unit
+
+- **No Accessibility** on the car HU. Never suggest or require Accessibility for car features.
+- App runs on **user 13** on multi-user car profiles.
+- Display 3 overlay (800×480) works with `SYSTEM_ALERT_WINDOW` + `createWindowContext`.
+- Use `scripts/install_car.sh` for APK install (`adb install` often fails with `INSTALL_FAILED_INTERNAL_ERROR`).

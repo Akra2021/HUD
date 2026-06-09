@@ -7,24 +7,20 @@ object HudPreferences {
     private const val PREFS = "hud_prefs"
     private const val KEY_SELECTED_NAV_PACKAGE = "selected_nav_package"
 
-    val knownNavPackages = listOf(
-        "ru.yandex.yandexnavi",
-        "com.huawei.maps.car.app",
-        "com.huawei.maps.app"
-    )
+    const val YANDEX_PACKAGE = "ru.yandex.yandexnavi"
+    const val DGIS_PACKAGE = "ru.dublgis.dgismobile"
+    const val DGIS_PACKAGE_LEGACY = "ru.dublgis.dgis"
 
-    const val PETAL_PACKAGE_PRIMARY = "com.huawei.maps.app"
-    const val PETAL_PACKAGE_CAR = "com.huawei.maps.car.app"
-
-    val petalPackages = setOf(PETAL_PACKAGE_PRIMARY, PETAL_PACKAGE_CAR)
+    val dgisPackages = setOf(DGIS_PACKAGE, DGIS_PACKAGE_LEGACY)
+    val knownNavPackages = listOf(YANDEX_PACKAGE, DGIS_PACKAGE)
 
     fun isHudEnabled(context: Context): Boolean =
         NotificationAccessHelper.isUserListeningEnabled(context)
 
-    fun getSelectedNavPackage(context: Context): String? {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_SELECTED_NAV_PACKAGE, null)
-    }
+    fun getSelectedNavPackage(context: Context): String? =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_SELECTED_NAV_PACKAGE, null)
+            ?.takeIf { isKnownNavPackage(it) }
 
     fun setSelectedNavPackage(context: Context, packageName: String?) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -35,29 +31,22 @@ object HudPreferences {
     }
 
     fun ensureDefaultSelection(context: Context) {
-        val current = getSelectedNavPackage(context)
-        if (current != null) {
-            val normalized = normalizeNavPackage(context, current)
-            if (normalized != null && normalized != current) {
-                setSelectedNavPackage(context, normalized)
-            }
+        val current = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_SELECTED_NAV_PACKAGE, null)
+        if (current != null && !isKnownNavPackage(current)) {
+            setSelectedNavPackage(context, defaultNavPackage(context))
             return
         }
-        val pm = context.packageManager
-        val defaultPkg = knownNavPackages.firstOrNull { pkg ->
-            runCatching {
-                pm.getApplicationInfo(pkg, 0)
-                true
-            }.getOrElse { false }
-        } ?: knownNavPackages.first()
-        setSelectedNavPackage(context, normalizeNavPackage(context, defaultPkg) ?: defaultPkg)
+        if (getSelectedNavPackage(context) != null) return
+        setSelectedNavPackage(context, defaultNavPackage(context))
     }
 
     fun matchesSelectedPackage(notificationPackage: String, selectedPackage: String): Boolean {
         if (notificationPackage == selectedPackage) return true
-        if (selectedPackage.contains("yandexnavi") && notificationPackage.contains("yandexnavi")) return true
-        if (selectedPackage.contains("huawei.maps") && notificationPackage.contains("huawei.maps")) return true
-        if (selectedPackage.contains("maps.car.app") && notificationPackage.contains("maps.car.app")) return true
+        if (selectedPackage.contains("yandexnavi") && notificationPackage.contains("yandexnavi")) {
+            return true
+        }
+        if (isDgisPackage(selectedPackage) && isDgisPackage(notificationPackage)) return true
         return false
     }
 
@@ -66,43 +55,54 @@ object HudPreferences {
         return matchesSelectedPackage(packageName, selected)
     }
 
-    fun isPetalPackage(packageName: String): Boolean =
-        packageName in petalPackages
+    fun isDgisPackage(packageName: String?): Boolean =
+        packageName != null && (packageName in dgisPackages || packageName.contains("dublgis"))
 
-    fun normalizeNavPackage(context: Context, packageName: String?): String? {
-        if (packageName == null) return null
-        return if (isPetalPackage(packageName)) resolvePetalPackage(context) else packageName
-    }
+    fun isDgisSelected(context: Context): Boolean =
+        isDgisPackage(getSelectedNavPackage(context))
+
+    fun isYandexPackage(packageName: String?): Boolean =
+        packageName != null && packageName.contains("yandexnavi")
+
+    fun isYandexSelected(context: Context): Boolean =
+        isYandexPackage(getSelectedNavPackage(context))
+
+    fun usesNotificationNavPath(context: Context): Boolean =
+        isHudEnabled(context)
+
+    fun isDgisInstalled(context: Context): Boolean =
+        isPackageInstalled(context, DGIS_PACKAGE) ||
+            isPackageInstalled(context, DGIS_PACKAGE_LEGACY)
 
     fun isSameNavSource(selected: String?, appPackage: String): Boolean {
         if (selected == null) return false
         if (selected == appPackage) return true
-        return isPetalPackage(selected) && isPetalPackage(appPackage)
+        if (isDgisPackage(selected) && isDgisPackage(appPackage)) return true
+        return false
     }
 
-    fun isAnyPetalInstalled(context: Context): Boolean =
-        petalPackages.any { isPackageInstalled(context, it) }
-
-    fun resolvePetalPackage(context: Context): String {
-        if (isPackageInstalled(context, PETAL_PACKAGE_PRIMARY)) return PETAL_PACKAGE_PRIMARY
-        if (isPackageInstalled(context, PETAL_PACKAGE_CAR)) return PETAL_PACKAGE_CAR
-        return PETAL_PACKAGE_PRIMARY
-    }
-
-    fun isPetalRunning(runningPackages: Collection<String>): Boolean =
-        runningPackages.any { pkg ->
-            isPetalPackage(pkg) || pkg.contains("huawei.maps")
+    fun resolveDgisPackage(context: Context): String =
+        when {
+            isPackageInstalled(context, DGIS_PACKAGE) -> DGIS_PACKAGE
+            isPackageInstalled(context, DGIS_PACKAGE_LEGACY) -> DGIS_PACKAGE_LEGACY
+            else -> DGIS_PACKAGE
         }
-
-    private fun isPackageInstalled(context: Context, packageName: String): Boolean =
-        runCatching {
-            context.packageManager.getApplicationInfo(packageName, 0)
-            true
-        }.getOrElse { false }
 
     fun needsAccessibilityForSelected(context: Context): Boolean {
         if (!AccessibilityHelper.isFeatureAvailable(context)) return false
         val selected = getSelectedNavPackage(context) ?: return false
         return selected.contains("yandex", ignoreCase = true)
     }
+
+    private fun isKnownNavPackage(packageName: String): Boolean =
+        packageName == YANDEX_PACKAGE || isDgisPackage(packageName)
+
+    private fun defaultNavPackage(context: Context): String =
+        knownNavPackages.firstOrNull { isPackageInstalled(context, it) } ?: YANDEX_PACKAGE
+
+    private fun isPackageInstalled(context: Context, packageName: String): Boolean =
+        runCatching {
+            context.packageManager.getApplicationInfo(packageName, 0)
+            true
+        }.getOrElse { false }
 }

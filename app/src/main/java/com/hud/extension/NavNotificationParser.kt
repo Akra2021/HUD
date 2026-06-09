@@ -15,9 +15,8 @@ object NavNotificationParser {
         "ru.yandex.navi",
         "yandexnavi",
         "yandex.navi",
-        "com.huawei.maps.car.app",
-        "com.huawei.maps.app",
-        "huawei.maps"
+        "dublgis",
+        "dgismobile"
     )
 
     private val PLACEHOLDER_REGEXES = listOf(
@@ -26,9 +25,7 @@ object NavNotificationParser {
         Regex("""^navigation\s+is\s+running\.?$""", RegexOption.IGNORE_CASE),
         Regex("""^навигация\s+запущена\.?$""", RegexOption.IGNORE_CASE),
         Regex("""^navigating[….\.…]{0,3}$""", RegexOption.IGNORE_CASE),
-        Regex("""^в\s+пути\.?$""", RegexOption.IGNORE_CASE),
-        Regex("""^服务中\.?$"""),
-        Regex("""^petal\s*maps\.?$""", RegexOption.IGNORE_CASE)
+        Regex("""^в\s+пути\.?$""", RegexOption.IGNORE_CASE)
     )
 
     private val DISTANCE_PATTERN = Pattern.compile(
@@ -108,6 +105,12 @@ object NavNotificationParser {
         if (best == null) {
             val placeholders = parsed.count { (_, g) -> g?.isPlaceholder == true }
             HudLog.i("pickBest: ${candidates.size} nav notif(s), parsed=${parsed.size}, placeholders=$placeholders, no displayable content")
+            if (placeholders > 0) {
+                if (selected.contains("yandex", ignoreCase = true)) {
+                    NavEventHub.setYandexFullscreenPlaceholder(true)
+                }
+                return buildNavigatorRunningGuidance(context)
+            }
         }
         return best
     }
@@ -162,7 +165,11 @@ object NavNotificationParser {
         Regex("""profile\s*picture""", RegexOption.IGNORE_CASE),
         Regex("""\bavatar\b""", RegexOption.IGNORE_CASE),
         Regex("""\baccount\s*(photo|picture|avatar)?\b""", RegexOption.IGNORE_CASE),
-        Regex("""\buser\s*photo\b""", RegexOption.IGNORE_CASE)
+        Regex("""\buser\s*photo\b""", RegexOption.IGNORE_CASE),
+        Regex("""^complete\s+(the\s+)?route\.?$""", RegexOption.IGNORE_CASE),
+        Regex("""^finish\s+(the\s+)?route\.?$""", RegexOption.IGNORE_CASE),
+        Regex("""^end\s+navigation\.?$""", RegexOption.IGNORE_CASE),
+        Regex("""^stop\s+navigation\.?$""", RegexOption.IGNORE_CASE)
     )
 
     /** Screen text (Accessibility) when notification has no route payload. */
@@ -214,26 +221,32 @@ object NavNotificationParser {
         val extras = notification.extras
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+        val ticker = notification.tickerText?.toString()?.trim().orEmpty()
+        val isDgis = HudPreferences.isDgisPackage(sbn.packageName)
         val isFloating = FloatingWindowNotificationDecoder.isFloatingWindow(extras)
-        val decoded = if (isFloating) {
+        val decoded = if (isFloating || isDgis) {
             FloatingWindowNotificationDecoder.decode(context, notification, iconLoader)
         } else {
             FloatingWindowNotificationDecoder.Decoded.EMPTY
         }
+        val largeIconBitmap = pickNotificationLargeIcon(notification, iconLoader)
 
         val texts = extractAllTexts(extras)
-        if (texts.isEmpty() && decoded.texts.isEmpty() && title.isEmpty() && text.isEmpty()) {
+        if (texts.isEmpty() && decoded.texts.isEmpty() && title.isEmpty() && text.isEmpty() &&
+            ticker.isEmpty() && largeIconBitmap == null
+        ) {
             HudLog.i("parse skip id=${sbn.id}: no text in extras or RemoteViews")
             return null
         }
 
-        val combined = (decoded.texts + texts + listOf(title, text)).joinToString(" | ")
+        val combined = (decoded.texts + texts + listOf(title, text, ticker)).joinToString(" | ")
         val topFullscreen = FloatingWindowNotificationDecoder.isTopFullscreen(extras)
         if (!hasNavSignals(title, text, decoded.texts) && isPlaceholderMessage(combined)) {
             HudLog.i("parse placeholder id=${sbn.id}: $combined")
             val noViews = notification.bigContentView == null && notification.contentView == null
-            if (sbn.packageName.contains("yandex") && (topFullscreen || (isFloating && noViews))) {
-                NavEventHub.setYandexFullscreenPlaceholder(true)
+            when {
+                sbn.packageName.contains("yandex") && (topFullscreen || (isFloating && noViews)) ->
+                    NavEventHub.setYandexFullscreenPlaceholder(true)
             }
             return NavGuidance(
                 instruction = "",
@@ -264,16 +277,35 @@ object NavNotificationParser {
             subText = subText,
             bigText = bigText,
             extraLines = lines,
-            allTexts = texts + decoded.texts,
+            allTexts = texts + decoded.texts + listOfNotNull(ticker.takeIf { it.isNotBlank() }),
             decoded = decoded,
             combined = combined,
             logTag = "notif:${sbn.packageName}#${sbn.id}",
             isFloating = isFloating,
-            iconLoader = iconLoader
+            iconLoader = iconLoader,
+            notificationLargeIcon = largeIconBitmap
         ).also {
-            if (it != null) NavEventHub.setYandexFullscreenPlaceholder(false)
+            if (it != null) {
+                NavEventHub.setYandexFullscreenPlaceholder(false)
+            }
         }
     }
+
+    fun buildNavigatorRunningGuidance(context: android.content.Context): NavGuidance =
+        NavGuidance(
+            instruction = context.getString(R.string.overlay_navigator_running),
+            detail = "",
+            routeSummaryText = null,
+            distanceMeters = null,
+            timeSeconds = null,
+            maneuverIconRes = MapboxManeuverResolver.iconFor(MapboxManeuverResolver.ManeuverType.UNKNOWN),
+            maneuverType = MapboxManeuverResolver.ManeuverType.UNKNOWN,
+            distanceTimerColor = NavTimerColors.forDistanceMeters(null),
+            timeTimerColor = NavTimerColors.forTimeSeconds(null),
+            notificationIcon = null,
+            isPlaceholder = false,
+            detailScore = 1
+        )
 
     private fun buildGuidanceFromTexts(
         context: android.content.Context,
@@ -287,7 +319,8 @@ object NavNotificationParser {
         combined: String,
         logTag: String,
         isFloating: Boolean,
-        iconLoader: (Icon) -> Bitmap?
+        iconLoader: (Icon) -> Bitmap?,
+        notificationLargeIcon: Bitmap? = null
     ): NavGuidance? {
         val rawInstruction = pickInstruction(title, text, bigText, extraLines, allTexts)
         val allDistances = findAllDistances(combined)
@@ -297,7 +330,9 @@ object NavNotificationParser {
         val routeTime = findRouteTime(combined, allTimes)
         val allTextLines = FloatingWindowNotificationDecoder.dedupeTexts(
             allTexts + listOf(title, text, subText, bigText) + extraLines
-        ).filter { !isPlaceholderMessage(it) && !isJunkHudLine(it) }
+        ).filter {
+            !isPlaceholderMessage(it) && !isJunkHudLine(it) && !NavLineRules.isNotificationActionLine(it)
+        }
 
         val maneuver = MapboxManeuverResolver.detectManeuver(*(allTextLines + rawInstruction).toTypedArray())
         val hasManeuverIcon = MapboxManeuverResolver.hasManeuverIcon(maneuver) || decoded.icons.isNotEmpty()
@@ -305,7 +340,14 @@ object NavNotificationParser {
             !(hasManeuverIcon && MapboxManeuverResolver.isGenericManeuverLabel(line))
         }
         val maneuverIcon = MapboxManeuverResolver.iconFor(maneuver)
-        val remoteManeuverIcon = pickRemoteManeuverIcon(decoded.icons)
+        val isDgisSource = logTag.contains("dublgis", ignoreCase = true)
+        val isYandexSource = logTag.contains("yandex", ignoreCase = true)
+        val remoteManeuverIcon = when {
+            isDgisSource || isYandexSource ->
+                pickRemoteManeuverIcon(decoded.icons) ?: notificationLargeIcon
+            notificationLargeIcon != null -> null
+            else -> pickRemoteManeuverIcon(decoded.icons)
+        }
         val street = pickStreet(title, text, subText, bigText, extraLines, filteredLines, rawInstruction, combined)
 
         val routeRemaining = findRouteRemaining(remainingDistance, allDistances, stepDistance)
@@ -336,13 +378,36 @@ object NavNotificationParser {
             combinedLength = combined.length,
             isFloating = isFloating,
             decodedTextCount = filteredLines.size,
-            hasRemoteIcon = remoteManeuverIcon != null
+            hasRemoteIcon = notificationLargeIcon != null || remoteManeuverIcon != null
         ) + if (logTag.startsWith("a11y:")) 80 else 0
+
+        if (notificationLargeIcon != null) {
+            HudLog.i(
+                "parsed $logTag largeIcon=${notificationLargeIcon.width}x${notificationLargeIcon.height}"
+            )
+        }
 
         HudLog.i(
             "parsed $logTag floating=$isFloating maneuver=$maneuver " +
                 "line1=${display.instruction} line2=${display.detail} line3=${display.routeSummaryText}"
         )
+
+        val trafficLightSeconds = if (logTag.contains("yandex", ignoreCase = true)) {
+            NavTrafficLightParser.extractSeconds(
+                lines = filteredLines + decoded.texts,
+                usedLines = listOf(
+                    display.instruction,
+                    display.detail,
+                    display.routeSummaryText.orEmpty()
+                )
+            ).also { seconds ->
+                if (seconds != null) {
+                    HudLog.i("parsed $logTag trafficLight=${seconds}s")
+                }
+            }
+        } else {
+            null
+        }
 
         return NavGuidance(
             instruction = display.instruction,
@@ -354,7 +419,12 @@ object NavNotificationParser {
             maneuverType = maneuver,
             distanceTimerColor = NavTimerColors.forDistanceMeters(routeRemaining?.meters ?: remainingDistance?.meters),
             timeTimerColor = NavTimerColors.forTimeSeconds(routeTime?.seconds),
-            notificationIcon = null,
+            trafficLightSeconds = trafficLightSeconds,
+            notificationIcon = when {
+                isDgisSource || isYandexSource -> null
+                MapboxManeuverResolver.isConfidentManeuver(maneuver) -> null
+                else -> notificationLargeIcon
+            },
             displayLines = display.displayLines,
             remoteManeuverIcon = remoteManeuverIcon,
             isPlaceholder = false,
@@ -363,7 +433,16 @@ object NavNotificationParser {
     }
 
     private fun pickRemoteManeuverIcon(icons: List<Bitmap>): Bitmap? =
-        icons.firstOrNull { it.width in 16..160 && it.height in 16..160 }
+        icons.filter { it.width in 16..160 && it.height in 16..160 }
+            .maxByOrNull { it.width * it.height }
+
+    private fun pickNotificationLargeIcon(
+        notification: Notification,
+        iconLoader: (Icon) -> Bitmap?
+    ): Bitmap? =
+        notification.getLargeIcon()
+            ?.let { iconLoader(it) }
+            ?.takeIf { it.width in 16..256 && it.height in 16..256 }
 
     private data class DisplayLines(
         val instruction: String,
@@ -400,16 +479,18 @@ object NavNotificationParser {
         val line1 = pickStepDistanceLabel(stepDistance, floatingLines)
         val routeDistLabel = routeRemaining?.label
         val routeTimeLabel = routeTime?.label
-        val line2 = pickDetailLine(
+        val line3 = formatRouteSummary(routeTime, routeRemaining)
+        var line2 = pickDetailLine(
             street = street,
             floatingLines = floatingLines,
             rawInstruction = rawInstruction,
             hideManeuverText = hideManeuverText,
             stepLabel = line1,
             routeDistLabel = routeDistLabel,
-            routeTimeLabel = routeTimeLabel
+            routeTimeLabel = routeTimeLabel,
+            routeSummary = line3
         )
-        val line3 = formatRouteSummary(routeTime, routeRemaining)
+        line2 = NavLineRules.cleanDetailForHud(line1, line2, line3, logSource = "buildDisplay")
 
         val displayLines = listOfNotNull(
             line1.takeIf { it.isNotBlank() },
@@ -442,22 +523,35 @@ object NavNotificationParser {
         hideManeuverText: Boolean,
         stepLabel: String,
         routeDistLabel: String?,
-        routeTimeLabel: String?
+        routeTimeLabel: String?,
+        routeSummary: String
     ): String {
         val excluded = buildSet {
-            add(FloatingWindowNotificationDecoder.normalizeKey(stepLabel))
-            routeDistLabel?.let { add(FloatingWindowNotificationDecoder.normalizeKey(it)) }
-            routeTimeLabel?.let { add(FloatingWindowNotificationDecoder.normalizeKey(it)) }
+            add(NavLineRules.normalizeKey(stepLabel))
+            routeDistLabel?.let { add(NavLineRules.normalizeKey(it)) }
+            routeTimeLabel?.let { add(NavLineRules.normalizeKey(it)) }
+            if (routeSummary.isNotBlank()) {
+                add(NavLineRules.normalizeKey(routeSummary))
+                routeSummary.split("|").forEach { part ->
+                    val trimmed = part.trim()
+                    if (trimmed.isNotBlank()) add(NavLineRules.normalizeKey(trimmed))
+                }
+            }
         }
 
         fun isExcluded(line: String): Boolean =
-            FloatingWindowNotificationDecoder.normalizeKey(line) in excluded
+            NavLineRules.normalizeKey(line) in excluded
 
         fun isDetailCandidate(line: String): Boolean {
             val trimmed = line.trim()
             if (trimmed.isEmpty() || isExcluded(trimmed)) return false
+            if (NavLineRules.isDistanceOnlyLine(trimmed)) return false
+            if (NavLineRules.duplicatesLine1(stepLabel, trimmed)) return false
             if (isDistanceLine(trimmed) || isTimeOnlyLine(trimmed)) return false
+            if (NavLineRules.matchesRouteMeta(trimmed, routeDistLabel, routeTimeLabel)) return false
+            if (NavLineRules.duplicatesRouteSummary(trimmed, routeSummary)) return false
             if (isJunkHudLine(trimmed) || isPlaceholderMessage(trimmed)) return false
+            if (NavLineRules.isNotificationActionLine(trimmed)) return false
             if (hideManeuverText && MapboxManeuverResolver.isGenericManeuverLabel(trimmed)) return false
             return true
         }
@@ -469,6 +563,7 @@ object NavNotificationParser {
 
         if (street.isNotBlank() && isDetailCandidate(street)) return street.trim()
         candidates.firstOrNull { isStreetLike(it) }?.let { return it.trim() }
+        candidates.firstOrNull { NavLineRules.isRoadNameLine(it) }?.let { return it.trim() }
 
         if (!hideManeuverText) {
             if (rawInstruction.isNotBlank() && isDetailCandidate(rawInstruction)) {
@@ -479,7 +574,14 @@ object NavNotificationParser {
             }?.let { return it.trim() }
         }
 
-        return candidates.maxByOrNull { detailLinePriority(it) }.orEmpty().trim()
+        return candidates
+            .filter { !NavLineRules.duplicatesRouteSummary(it, routeSummary) }
+            .maxByOrNull { detailLinePriority(it) }
+            .orEmpty()
+            .trim()
+            .let { picked ->
+                NavLineRules.cleanDetailForHud(stepLabel, picked, routeSummary, logSource = "pickDetailLine")
+            }
     }
 
     private fun isCameraLine(line: String): Boolean {
@@ -505,9 +607,11 @@ object NavNotificationParser {
     private fun detailLinePriority(line: String): Int {
         var score = line.length
         if (isStreetLike(line)) score += 30
+        if (NavLineRules.isRoadNameLine(line)) score += 45
         if (isExitLine(line)) score += 40
         if (isCameraLine(line)) score += 50
         if (containsManeuverHint(line)) score += 20
+        if (NavLineRules.isNotificationActionLine(line)) score -= 500
         return score
     }
 
@@ -549,6 +653,7 @@ object NavNotificationParser {
         listOf(subText, title, text, bigText).forEach { addStreetCandidate(candidates, it) }
         lines.forEach { addStreetCandidate(candidates, it) }
         allTexts.forEach { addStreetCandidate(candidates, it) }
+        allTexts.forEach { parseTickerStreet(it)?.let { addStreetCandidate(candidates, it) } }
 
         return candidates
             .filter { it != rawInstruction }
@@ -558,6 +663,7 @@ object NavNotificationParser {
             .filter { !ETA_CLOCK_PATTERN.matcher(it).matches() }
             .filter { !containsOnlyMeta(it) }
             .filter { !isJunkHudLine(it) }
+            .filter { !NavLineRules.isNotificationActionLine(it) }
             .maxByOrNull { streetPriority(it) }
             .orEmpty()
     }
@@ -578,8 +684,10 @@ object NavNotificationParser {
         val lower = line.lowercase()
         if (line.contains("ул", ignoreCase = true) || line.contains("street", ignoreCase = true)) score += 20
         if (lower.contains("exit") || lower.contains("съезд") || lower.contains("выезд")) score += 25
+        if (NavLineRules.isRoadNameLine(line)) score += 35
         if (lower.contains("camera") || lower.contains("камер") || lower.contains("radar") || lower.contains("радар")) score += 25
         if (MapboxManeuverResolver.isGenericManeuverLabel(line)) score -= 100
+        if (NavLineRules.isNotificationActionLine(line)) score -= 500
         if (DISTANCE_PATTERN.matcher(line).find()) score -= 50
         return score
     }
@@ -634,6 +742,7 @@ object NavNotificationParser {
     }
 
     private fun isJunkHudLine(line: String): Boolean {
+        if (NavLineRules.isNotificationActionLine(line)) return true
         if (HudOverlayIcons.isFinishRouteMessage(line)) return true
         val norm = line.trim().lowercase().trimEnd('.', '!', '?')
         if (norm.isEmpty()) return true
@@ -643,26 +752,39 @@ object NavNotificationParser {
         return false
     }
 
+    /** 2GIS ticker: "20 m — Al Asayel street" → street name after separator. */
+    private fun parseTickerStreet(line: String): String? {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) return null
+        for (separator in listOf('—', '–', '-', '|')) {
+            if (separator !in trimmed) continue
+            val parts = trimmed.split(separator, limit = 2)
+            if (parts.size != 2) continue
+            val left = parts[0].trim()
+            val right = parts[1].trim()
+            if (right.isBlank() || NavLineRules.isNotificationActionLine(right) || isJunkHudLine(right)) continue
+            if (left.isEmpty() || DISTANCE_PATTERN.matcher(left).find() || isDistanceLine(left)) {
+                return right
+            }
+        }
+        return null
+    }
+
     private fun sanitizeDisplayLines(display: DisplayLines): DisplayLines {
         var line1 = HudOverlayIcons.sanitizeLine(display.instruction.takeUnless { isJunkHudLine(it) }.orEmpty())
         var line2 = HudOverlayIcons.sanitizeLine(display.detail.takeUnless { isJunkHudLine(it) }.orEmpty())
         var line3 = display.routeSummaryText?.let { HudOverlayIcons.sanitizeLine(it) }?.takeIf { it.isNotBlank() }
 
-        // Line 1: step distance only.
+        // Line 1: step distance only — never copy line 1 into line 2.
         if (line1.isNotBlank() && !isDistanceLine(line1)) {
-            if (line2.isBlank() && isDetailLineCandidate(line1, hideManeuverText = false)) {
-                line2 = line1
-            }
             line1 = ""
         }
         if (line1.isBlank()) {
             line1 = display.stepDistanceText.orEmpty().takeIf { isDistanceLine(it) }.orEmpty()
         }
 
-        // Line 2: street / camera / exit / maneuver — never time or distance.
-        if (line2.isNotBlank() && (isDistanceLine(line2) || isTimeOnlyLine(line2))) {
-            line2 = ""
-        }
+        // Line 2: street / exit / road — never duplicate line 1 or show distance here.
+        line2 = NavLineRules.cleanDetailForHud(line1, line2, line3, logSource = "sanitize")
 
         // Line 3: route time | route distance.
         if (!line3.isNullOrBlank() && isDistanceLine(line3) && !line3.contains("|")) {
@@ -726,8 +848,10 @@ object NavNotificationParser {
         var line3 = display.routeSummaryText
 
         if (line1.isBlank() && isDistanceLine(title)) line1 = title.trim()
-        if (line2.isBlank() && text.isNotBlank() && isDetailLineCandidate(text, hideManeuverText)) {
-            line2 = text.trim()
+        if (line2.isBlank() &&
+            text.isNotBlank()
+        ) {
+            line2 = NavLineRules.cleanDetailForHud(line1, text.trim(), line3, logSource = "extrasFallback")
         }
 
         val displayLines = listOfNotNull(
@@ -777,7 +901,7 @@ object NavNotificationParser {
     private fun containsManeuverHint(text: String): Boolean {
         val hints = listOf(
             "поверн", "через", "м ", "km", "км", "turn", "exit", "merge", "roundabout", "разворот",
-            "go right", "go left", "go straight", "направо", "налево", "bear", "keep"
+            "go right", "go left", "go straight", "направо", "налево", "bear", "keep", "плавно"
         )
         return hints.any { text.contains(it, ignoreCase = true) }
     }
@@ -853,6 +977,7 @@ object NavNotificationParser {
     private fun isDetailLineCandidate(line: String, hideManeuverText: Boolean): Boolean {
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return false
+        if (NavLineRules.isNotificationActionLine(trimmed)) return false
         if (isPlaceholderMessage(trimmed) || isJunkHudLine(trimmed)) return false
         if (isDistanceLine(trimmed) || isTimeOnlyLine(trimmed)) return false
         if (hideManeuverText && MapboxManeuverResolver.isGenericManeuverLabel(trimmed)) return false

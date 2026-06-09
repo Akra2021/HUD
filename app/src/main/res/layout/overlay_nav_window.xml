@@ -19,7 +19,7 @@
             android:layout_marginEnd="8dp"
             android:contentDescription="@string/overlay_nav_icon"
             android:scaleType="fitCenter"
-            android:src="@drawable/mapbox_ic_turn_straight"
+            android:src="@drawable/ic_nav_forward_fallback"
             android:visibility="visible" />
 
         <LinearLayout
@@ -60,6 +60,40 @@
                 android:textSize="@dimen/overlay_meta_text"
                 android:textStyle="bold"
                 android:visibility="gone" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/overlay_traffic_light_block"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/overlay_traffic_light_icon"
+                android:layout_width="@dimen/overlay_traffic_icon_width"
+                android:layout_height="@dimen/overlay_traffic_icon_height"
+                android:contentDescription="@string/overlay_traffic_light"
+                android:scaleType="fitCenter"
+                android:src="@drawable/trafic_light" />
+
+            <TextView
+                android:id="@+id/overlay_traffic_timer_value"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:background="@drawable/overlay_traffic_timer_circle"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:minWidth="@dimen/overlay_traffic_circle_min"
+                android:minHeight="@dimen/overlay_traffic_circle_min"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:textColor="#FFFFFF"
+                android:textSize="@dimen/overlay_traffic_timer_text"
+                android:textStyle="bold" />
         </LinearLayout>
     </LinearLayout>
 </FrameLayout>

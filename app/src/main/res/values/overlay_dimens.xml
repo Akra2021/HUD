@@ -3,7 +3,14 @@
 <resources>
     <dimen name="overlay_icon_size">58px</dimen>
     <dimen name="overlay_title_text">14px</dimen>
-    <dimen name="overlay_body_text">10px</dimen>
-    <dimen name="overlay_meta_text">9px</dimen>
+    <dimen name="overlay_body_text">12px</dimen>
+    <dimen name="overlay_meta_text">10px</dimen>
     <dimen name="overlay_padding">5px</dimen>
+    <dimen name="overlay_traffic_icon_width">34px</dimen>
+    <dimen name="overlay_traffic_icon_height">50px</dimen>
+    <dimen name="overlay_traffic_circle_min">44px</dimen>
+    <dimen name="overlay_traffic_circle_min_wide">52px</dimen>
+    <dimen name="overlay_traffic_circle_stroke">3px</dimen>
+    <dimen name="overlay_traffic_timer_text">13px</dimen>
+    <dimen name="overlay_traffic_timer_text_compact">10px</dimen>
 </resources>

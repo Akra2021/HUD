@@ -8,19 +8,23 @@ class HUDNotificationListenerService : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        NotificationAccessHelper.reportServiceConnected()
+        HudLog.i("NLS onCreate")
     }
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        HudLog.i("NLS onDestroy")
         super.onDestroy()
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
         instance = this
+        NotificationAccessHelper.reportServiceConnected()
         HudLog.i("NLS connected hud=${HudPreferences.isHudEnabled(this)} selected=${HudPreferences.getSelectedNavPackage(this)}")
         NavEventHub.publishConnection(true)
-        if (HudPreferences.isHudEnabled(this)) {
+        if (HudPreferences.usesNotificationNavPath(this)) {
             publishBestGuidance("onListenerConnected")
         }
     }
@@ -33,13 +37,14 @@ class HUDNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        if (HudPreferences.isDgisPackage(sbn.packageName)) {
+            HudRemoteViewDecoder.logNotification(sbn)
+        }
+
         if (!HudPreferences.isHudEnabled(this)) return
         if (!NavNotificationParser.isNavPackage(sbn.packageName)) return
+        if (!HudPreferences.isSelectedNavPackage(this, sbn.packageName)) return
         HudLog.i("posted pkg=${sbn.packageName} id=${sbn.id}")
-        if (!HudPreferences.isSelectedNavPackage(this, sbn.packageName)) {
-            HudLog.d("posted skip: not selected source")
-            return
-        }
         publishFromNotification(sbn, "posted")
         publishBestGuidance("posted")
     }
@@ -57,26 +62,42 @@ class HUDNotificationListenerService : NotificationListenerService() {
     }
 
     fun publishBestGuidance(reason: String): NavGuidance? {
-        if (!HudPreferences.isHudEnabled(this)) return null
+        if (!HudPreferences.usesNotificationNavPath(this)) return null
         var guidance = findBestGuidance(reason)
         if (guidance == null && AccessibilityHelper.isFeatureAvailable(this)) {
             NavAccessibilityService.requestScan(this, "notifEmpty:$reason")
         }
+        if (guidance == null && NavEventHub.yandexFullscreenPlaceholder) {
+            HudLog.i("publish ($reason): Yandex fullscreen — show status only")
+            NavEventHub.resetLastGuidance()
+            NavOverlayHolder.showWaiting()
+            NavEventHub.publishClear()
+            return null
+        }
         if (guidance == null) {
-            guidance = NavEventHub.getStaleGuidanceIfRecent()
-            if (guidance != null) {
-                HudLog.i("publish ($reason): using stale '${guidance.instruction}'")
+            if (reason.contains("removed")) {
+                NavEventHub.resetLastGuidance()
+                NavEventHub.resetNavPlaceholders()
+            } else {
+                guidance = NavEventHub.getStaleGuidanceIfRecent(this)
+                if (guidance != null) {
+                    HudLog.i("publish ($reason): using stale '${guidance.instruction}'")
+                }
             }
             if (guidance == null) {
                 HudLog.i("publish ($reason): no guidance from notifications")
+                NavEventHub.resetLastGuidance()
+                NavOverlayHolder.showWaiting()
+                NavEventHub.publishClear()
+                return null
             }
         }
-        if (guidance == null) return null
         HudLog.i(
             "publish ($reason): line1='${guidance.instruction}' line2='${guidance.detail}' " +
                 "line3='${guidance.routeSummaryText}' score=${guidance.detailScore}"
         )
-        NavEventHub.publishNav(guidance, this)
+        val source = HudPreferences.getSelectedNavPackage(this)
+        NavEventHub.publishNav(guidance, this, source)
         return guidance
     }
 
@@ -87,7 +108,7 @@ class HUDNotificationListenerService : NotificationListenerService() {
         } ?: return
         if (guidance.isPlaceholder || !guidance.hasDisplayableContent()) return
         HudLog.i("publish direct ($reason) id=${sbn.id}: '${guidance.instruction}'")
-        NavEventHub.publishNav(guidance, this)
+        NavEventHub.publishNav(guidance, this, sbn.packageName)
     }
 
     private fun findBestGuidance(reason: String = ""): NavGuidance? {
@@ -118,12 +139,15 @@ class HUDNotificationListenerService : NotificationListenerService() {
         private var instance: HUDNotificationListenerService? = null
 
         fun refreshActiveNotifications(reason: String = "refresh") {
+            val ctx = NotificationAccessHelper.getAppContext()
+            if (ctx != null && !HudPreferences.usesNotificationNavPath(ctx)) return
             val service = instance
             if (service != null) {
                 service.publishBestGuidance(reason)
                 return
             }
             HudLog.i("refreshActiveNotifications ($reason): service instance null, need rebind")
+            NotificationAccessHelper.reportServiceInstanceMissing(reason)
         }
 
         fun isRunning(): Boolean = instance != null
